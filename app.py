@@ -47,7 +47,7 @@ def index():
     return jsonify({
         "status": "online",
         "api": "API da Catraca",
-        "mensagem": "A API está rodando perfeitamente localmente!"
+        "mensagem": "A API está rodando perfeitamente!"
     }), 200
 
 # ---------------------
