@@ -1,0 +1,532 @@
+openapi: 3.0.3
+
+info:
+  title: Catraca Academia API
+  description: |
+    API de controle de acesso para academia.
+    Gerencia o cadastro de alunos e valida entradas via CPF na catraca.
+  version: "2.1"
+  contact:
+    name: Suporte Técnico
+
+servers:
+  - url: http://localhost:5000
+    description: Ambiente local (desenvolvimento)
+  - url: https://catraca-api.vercel.app
+    description: Produção (Vercel)
+
+tags:
+  - name: Catraca
+    description: Validação de acesso — endpoint público
+  - name: Autenticação
+    description: Login e geração de token JWT
+  - name: Alunos
+    description: Gestão de alunos (CRUD) — requer token
+  - name: Relatórios
+    description: Estatísticas e logs — requer token
+  - name: Sistema
+    description: Health-check e informações da API
+
+# ─────────────────────────────────────────
+#  SECURITY
+# ─────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+
+    Aluno:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "12345678909"
+          description: CPF limpo (usado como ID no banco)
+        nome:
+          type: string
+          example: "João da Silva"
+        cpf:
+          type: string
+          example: "12345678909"
+        cpf_formatado:
+          type: string
+          example: "123.456.789-09"
+        email:
+          type: string
+          example: "joao@email.com"
+        telefone:
+          type: string
+          example: "(11) 99999-9999"
+        status:
+          type: string
+          enum: [Ativo, Bloqueado]
+          example: "Ativo"
+        data_vencimento:
+          type: string
+          format: date-time
+        observacoes:
+          type: string
+
+    AlunoInput:
+      type: object
+      required: [nome, cpf]
+      properties:
+        nome:
+          type: string
+          example: "João da Silva"
+        cpf:
+          type: string
+          example: "123.456.789-09"
+          description: Aceita formatado ou apenas números
+        email:
+          type: string
+          example: "joao@email.com"
+        telefone:
+          type: string
+          example: "(11) 99999-9999"
+        plano:
+          type: string
+          enum: [mensal, trimestral, semestral, anual]
+          default: mensal
+        observacoes:
+          type: string
+
+    AlunoUpdate:
+      type: object
+      properties:
+        nome:
+          type: string
+        email:
+          type: string
+        telefone:
+          type: string
+        status:
+          type: string
+          enum: [Ativo, Bloqueado]
+        plano:
+          type: string
+          enum: [mensal, trimestral, semestral, anual]
+        observacoes:
+          type: string
+
+    DecisaoAcesso:
+      type: object
+      properties:
+        acesso:
+          type: boolean
+          example: true
+        mensagem:
+          type: string
+          example: "Acesso Liberado. Bem-vindo(a)!"
+        status:
+          type: string
+          enum: [Ativo, Bloqueado, "Não Cadastrado"]
+        nome:
+          type: string
+          description: Presente apenas quando acesso é liberado
+
+    ErroResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Aluno não encontrado"
+
+    LoginInput:
+      type: object
+      required: [usuario, senha]
+      properties:
+        usuario:
+          type: string
+          example: "admin"
+        senha:
+          type: string
+          example: "SuaSenhaAqui"
+
+    LoginResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        token:
+          type: string
+          description: JWT válido por 24h
+        usuario:
+          type: string
+
+# ─────────────────────────────────────────
+#  PATHS
+# ─────────────────────────────────────────
+paths:
+
+  /:
+    get:
+      tags: [Sistema]
+      summary: Informações da API
+      responses:
+        "200":
+          description: Info e lista de endpoints
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sistema: { type: string }
+                  versao:  { type: string }
+                  status:  { type: string }
+
+  /status:
+    get:
+      tags: [Sistema]
+      summary: Health-check da API e Firebase
+      responses:
+        "200":
+          description: Status da API e do banco
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sistema:  { type: string }
+                  status:   { type: string }
+                  firebase: { type: string, enum: [conectado, desconectado] }
+                  versao:   { type: string }
+
+  /login:
+    post:
+      tags: [Autenticação]
+      summary: Login do administrador
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Token JWT gerado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Dados inválidos ou ausentes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "401":
+          description: Credenciais incorretas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+  /acesso/{cpf}:
+    get:
+      tags: [Catraca]
+      summary: Validação de acesso na catraca
+      description: |
+        Endpoint público — **sem token**.
+        O CPF pode chegar formatado (123.456.789-09) ou limpo (12345678909).
+        Retorna a decisão de acesso e registra log automaticamente.
+      parameters:
+        - name: cpf
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "12345678909"
+      responses:
+        "200":
+          description: Acesso liberado (aluno Ativo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisaoAcesso"
+              example:
+                acesso: true
+                mensagem: "Acesso Liberado. Bem-vindo(a)!"
+                status: "Ativo"
+                nome: "João da Silva"
+        "403":
+          description: Acesso negado (Bloqueado ou Não Cadastrado)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisaoAcesso"
+              examples:
+                bloqueado:
+                  value:
+                    acesso: false
+                    mensagem: "Procure a secretaria da academia"
+                    status: "Bloqueado"
+                nao_cadastrado:
+                  value:
+                    acesso: false
+                    mensagem: "Aluno não encontrado. Procure a secretaria."
+                    status: "Não Cadastrado"
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+  /alunos:
+    post:
+      tags: [Alunos]
+      summary: Cadastrar novo aluno
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlunoInput"
+      responses:
+        "201":
+          description: Aluno cadastrado com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  id:      { type: string }
+                  cpf:     { type: string }
+        "400":
+          description: Dados inválidos (CPF mal formatado, nome ausente, plano inválido)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "401":
+          description: Token ausente ou inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "409":
+          description: CPF já cadastrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+    get:
+      tags: [Alunos]
+      summary: Listar todos os alunos
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: nome
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filtro parcial por nome (case-insensitive)
+          example: "João"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [Ativo, Bloqueado]
+          description: Filtro por status
+      responses:
+        "200":
+          description: Lista de alunos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  alunos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Aluno"
+        "401":
+          description: Token ausente ou inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+  /alunos/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: CPF do aluno (limpo ou formatado)
+        example: "12345678909"
+
+    get:
+      tags: [Alunos]
+      summary: Consultar aluno por ID (CPF)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Dados do aluno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aluno"
+        "401":
+          description: Token ausente ou inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "404":
+          description: Aluno não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+    put:
+      tags: [Alunos]
+      summary: Editar informações e status do aluno
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlunoUpdate"
+      responses:
+        "200":
+          description: Aluno atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  id:      { type: string }
+                  cpf:     { type: string }
+        "400":
+          description: Dados inválidos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "401":
+          description: Token ausente ou inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "404":
+          description: Aluno não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+    delete:
+      tags: [Alunos]
+      summary: Excluir aluno do sistema
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Aluno excluído com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  id:      { type: string }
+        "401":
+          description: Token ausente ou inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "404":
+          description: Aluno não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+  /alunos/{id}/status:
+    patch:
+      tags: [Alunos]
+      summary: Alterar apenas o status do aluno
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "12345678909"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [Ativo, Bloqueado]
+      responses:
+        "200":
+          description: Status alterado com sucesso
+        "400":
+          description: Status inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+        "404":
+          description: Aluno não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErroResponse"
+
+  /relatorios/geral:
+    get:
+      tags: [Relatórios]
+      summary: Relatório geral da academia
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Estatísticas gerais
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_alunos:
+                    type: integer
+                  alunos_ativos:
+                    type: integer
+                  alunos_bloqueados:
+                    type: integer
+                  distribuicao_planos:
+                    type: object
+                  ultimos_acessos:
+                    type: array
+                    items:
+                      type: object
