@@ -367,10 +367,10 @@ Este projeto está sob a licença MIT. Sinta-se livre para usar, modificar e dis
 
 ## 📞 Contato
 
-| Desenvolvedor | Função | GitHub |
-|---------------|--------|--------|
-| Fonseca-Felix | Back-End | [@fonseca-felix](https://github.com/fonseca-felix) |
-| mariajschimidt | Front-End | [@mariajschimidt](https://github.com/mariajschimidt) |
+| Desenvolvedor | Função | GitHub | Email |
+|---------------|--------|--------|-------|
+| Fonseca-Felix | Back-End | [@fonseca-felix](https://github.com/fonseca-felix) | [felix.fonseca.senai@gmail.com](mailto:felix.fonseca.senai@gmail.com) |
+| mariajschimidt | Front-End | [@mariajschimidt](https://github.com/mariajschimidt) | [maria.prestes.senai@gmail.com](mailto:maria.prestes.senai@gmail.com) |
 
 ---
 
