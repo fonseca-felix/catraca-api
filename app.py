@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import json
 from datetime import datetime, timedelta
 import re
+from flasgger import Swagger 
 
 load_dotenv()
 
@@ -38,6 +39,14 @@ except Exception as e:
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "minha-chave-secreta")
 CORS(app, origins="*")
+
+# Versão do OpenAPI
+app.config['SWAGGER'] = {
+    'openapi': '3.0.3'
+}
+
+# Chamar o OpenAPI para o codigo
+swagger = Swagger(app, template_file="openapi.yaml")
 
 # ---------------------
 #   ROTA RAIZ (STATUS DA API)

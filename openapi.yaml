@@ -10,9 +10,7 @@ info:
     name: Suporte Técnico
 
 servers:
-  - url: http://localhost:5000
-    description: Ambiente local (desenvolvimento)
-  - url: https://catraca-api.vercel.app
+  - url: https://catraca-api.vercel.app/
     description: Produção (Vercel)
 
 tags:
