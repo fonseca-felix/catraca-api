@@ -422,18 +422,18 @@ def verificar_acesso(cpf):
 
 @app.route("/login", methods=["POST"])
 def login():
+    """Rota de login - usuário: adm, senha: catraca-adm"""
     dados = request.get_json()
+    
     if not dados:
         return jsonify({"error": "Dados não fornecidos"}), 400
     
+    # Aceita tanto 'usuario' quanto 'username'
     usuario = dados.get("usuario") or dados.get("username")
     senha = dados.get("senha") or dados.get("password")
     
-    # Usuário padrão - configurável via .env
-    admin_user = os.getenv("ADMIN_USERNAME", "admin")
-    admin_pass = os.getenv("ADMIN_PASSWORD", "adm123")
-    
-    if usuario == admin_user and senha == admin_pass:
+    # Credenciais corretas do sistema
+    if usuario == "adm" and senha == "catraca-adm":
         token = gerar_token(usuario)
         return jsonify({
             "token": token,
@@ -441,7 +441,9 @@ def login():
             "message": "Login realizado com sucesso"
         }), 200
     
-    return jsonify({"error": "Login inválido"}), 401
+    return jsonify({
+        "error": "Login inválido. Use usuário: 'adm' e senha: 'catraca-adm'"
+    }), 401
 
 # ==================== INICIALIZAÇÃO ====================
 
