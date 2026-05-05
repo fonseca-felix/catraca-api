@@ -7,7 +7,17 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="repla
 from flask import Flask, jsonify, request
 import firebase_admin
 from firebase_admin import credentials, firestore
-from auth import token_obrigatorio, gerar_token
+
+# CORREÇÃO: Importar auth do mesmo diretório
+try:
+    from auth import token_obrigatorio, gerar_token
+except ImportError:
+    # Se falhar, tenta importar do mesmo diretório com caminho relativo
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from auth import token_obrigatorio, gerar_token
+
 from flask_cors import CORS
 from werkzeug.security import check_password_hash
 import os
@@ -22,22 +32,73 @@ load_dotenv()
 # ---------------------
 #   INICIALIZAÇÃO FIREBASE
 # ---------------------
+db = None
+FIREBASE_CONNECTED = False
+
+print("[INFO] Iniciando configuração do Firebase...")
+
 try:
     if os.getenv("VERCEL") == "true":
         firebase_creds = os.getenv("FIREBASE_CREDENTIALS")
-        cred = credentials.Certificate(json.loads(firebase_creds))
+        if firebase_creds:
+            cred = credentials.Certificate(json.loads(firebase_creds))
+            print("[INFO] Usando credenciais do Vercel")
+        else:
+            print("[ERRO] FIREBASE_CREDENTIALS não encontrada nas variáveis de ambiente")
+            cred = None
     else:
-        cred = credentials.Certificate("firebase.json")
+        # Tenta encontrar o arquivo de credenciais Firebase
+        firebase_json_path = os.path.join(os.path.dirname(__file__), "teste-catraca-firebase-adminsdk-fbsvc-e8860cef87.json")
+        print(f"[INFO] Procurando arquivo de credenciais em: {firebase_json_path}")
+        
+        if os.path.exists(firebase_json_path):
+            print("[INFO] Arquivo encontrado, tentando conectar...")
+            try:
+                cred = credentials.Certificate(firebase_json_path)
+                print("[INFO] Credenciais carregadas com sucesso")
+            except Exception as cred_error:
+                print(f"[ERRO] Erro ao carregar credenciais: {cred_error}")
+                print("[INFO] O arquivo de credenciais pode estar corrompido ou inválido")
+                cred = None
+        else:
+            print(f"[ERRO] Arquivo de credenciais não encontrado: {firebase_json_path}")
+            cred = None
     
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print("[OK] Conectado ao Firebase")
+    if cred:
+        try:
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            FIREBASE_CONNECTED = True
+            print("[OK] Conectado ao Firebase com sucesso!")
+        except ValueError as init_error:
+            if "already initialized" in str(init_error).lower():
+                print("[INFO] Firebase já estava inicializado")
+                db = firestore.client()
+                FIREBASE_CONNECTED = True
+            else:
+                print(f"[ERRO] Erro ao inicializar Firebase: {init_error}")
+                cred = None
+        except Exception as init_error:
+            print(f"[ERRO] Erro inesperado ao inicializar Firebase: {init_error}")
+            cred = None
+    else:
+        print("[ERRO] Não foi possível conectar ao Firebase - credenciais ausentes ou inválidas")
+        print("[INFO] Para corrigir:")
+        print("  1. Acesse https://console.firebase.google.com")
+        print("  2. Selecione seu projeto")
+        print("  3. Vá em Configurações > Contas de serviço")
+        print("  4. Gere uma nova chave privada")
+        print("  5. Baixe e substitua o arquivo na pasta backend/")
+        print("[INFO] O aplicativo continuará funcionando em modo offline para testes")
+        
 except Exception as e:
-    print(f"[ERRO] Falha ao conectar: {e}")
-    exit(1)
+    print(f"[ERRO] Falha geral na configuração do Firebase: {e}")
+    import traceback
+    traceback.print_exc()
+    print("[INFO] Aplicativo continuará em modo offline")
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "minha-chave-secreta")
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "catraca123")
 CORS(app, origins="*")
 
 # Versão do OpenAPI
@@ -45,8 +106,16 @@ app.config['SWAGGER'] = {
     'openapi': '3.0.3'
 }
 
-# Chamar o OpenAPI para o codigo
-swagger = Swagger(app, template_file="openapi.yaml")
+# Tentar carregar Swagger se o arquivo existir
+try:
+    openapi_path = os.path.join(os.path.dirname(__file__), "openapi.yaml")
+    if os.path.exists(openapi_path):
+        swagger = Swagger(app, template_file=openapi_path)
+        print("[OK] Swagger carregado")
+    else:
+        print("[AVISO] Arquivo openapi.yaml não encontrado")
+except Exception as e:
+    print(f"[AVISO] Erro ao carregar Swagger: {e}")
 
 # ---------------------
 #   ROTA RAIZ (STATUS DA API)
@@ -56,7 +125,8 @@ def index():
     return jsonify({
         "status": "online",
         "api": "API da Catraca",
-        "mensagem": "A API está rodando perfeitamente!"
+        "mensagem": "A API está rodando perfeitamente!",
+        "firebase_conectado": db is not None
     }), 200
 
 # ---------------------
@@ -71,6 +141,10 @@ def validar_cpf_simples(cpf):
 
 def obter_proximo_id():
     """Gera ID sequencial (1, 2, 3...) via transação."""
+    if db is None:
+        # Mock para testes sem Firebase
+        return 1
+    
     contador_ref = db.collection("configuracoes").document("contador_alunos")
     @firestore.transactional
     def transacao_id(transaction):
@@ -92,6 +166,9 @@ def obter_proximo_id():
 @app.route("/alunos", methods=["GET"])
 @token_obrigatorio
 def listar_todos_alunos():
+    if not FIREBASE_CONNECTED:
+        return jsonify({"error": "Banco de dados não conectado. Configure as credenciais do Firebase primeiro.", "modo": "offline"}), 503
+    
     try:
         alunos = []
         for doc in db.collection("alunos").stream():
@@ -107,6 +184,9 @@ def listar_todos_alunos():
 @app.route("/alunos/ultimo_id", methods=["GET"])
 @token_obrigatorio
 def obter_ultimo_id_cadastrado():
+    if db is None:
+        return jsonify({"ultimo_id": 0}), 200
+    
     try:
         contador_ref = db.collection("configuracoes").document("contador_alunos").get()
         if contador_ref.exists:
@@ -115,10 +195,13 @@ def obter_ultimo_id_cadastrado():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# BUSCAR UM ESPECÍFICO (DIGITA O CPF E APARECE)
+# BUSCAR UM ESPECÍFICO
 @app.route("/alunos/<string:cpf>", methods=["GET"])
 @token_obrigatorio
 def buscar_aluno_por_cpf(cpf):
+    if not FIREBASE_CONNECTED:
+        return jsonify({"error": "Sistema funcionando em modo offline - Firebase não configurado"}), 503
+
     try:
         cpf_limpo = limpar_cpf(cpf)
         doc = db.collection("alunos").document(cpf_limpo).get()
@@ -138,6 +221,9 @@ def buscar_aluno_por_cpf(cpf):
 @app.route("/alunos", methods=["POST"])
 @token_obrigatorio
 def cadastrar_aluno():
+    if not FIREBASE_CONNECTED:
+        return jsonify({"error": "Sistema funcionando em modo offline - Firebase não configurado"}), 503
+
     dados = request.get_json()
     
     if not dados:
@@ -152,10 +238,9 @@ def cadastrar_aluno():
         return jsonify({"error": "CPF já cadastrado no sistema"}), 409
 
     try:
-        novo_id = obter_proximo_id() # Transacionado e seguro
+        novo_id = obter_proximo_id()
         status = dados.get("status", "liberado")
         
-        # Inserção explícita de apenas ID, Nome, CPF e Status
         aluno_data = {
             "id":            novo_id,
             "nome":          dados.get("nome", "Sem Nome").strip(),
@@ -173,6 +258,9 @@ def cadastrar_aluno():
 @app.route("/alunos/<string:cpf>/status", methods=["PUT", "PATCH"])
 @token_obrigatorio
 def alterar_status_aluno(cpf):
+    if not FIREBASE_CONNECTED:
+        return jsonify({"error": "Sistema funcionando em modo offline - Firebase não configurado"}), 503
+
     try:
         cpf_limpo = limpar_cpf(cpf)
         dados = request.get_json()
@@ -191,25 +279,60 @@ def alterar_status_aluno(cpf):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# EDITAR NOME DO ALUNO (Opcional, mas mantido para flexibilidade)
+# EDITAR NOME DO ALUNO
 @app.route("/alunos/<string:cpf>", methods=["PUT"])
 @token_obrigatorio
 def editar_aluno(cpf):
+    if not FIREBASE_CONNECTED:
+        return jsonify({"error": "Sistema funcionando em modo offline - Firebase não configurado"}), 503
+
     try:
         cpf_limpo = limpar_cpf(cpf)
         dados = request.get_json()
         
         aluno_ref = db.collection("alunos").document(cpf_limpo)
-        if not aluno_ref.get().exists:
+        aluno_snap = aluno_ref.get()
+        if not aluno_snap.exists:
             return jsonify({"error": "Usuário não está cadastrado"}), 404
 
-        campos_permitidos = ["nome", "status"]
+        campos_permitidos = ["nome", "status", "cpf"]
         dados_seguros = {k: v for k, v in dados.items() if k in campos_permitidos}
 
         if not dados_seguros:
              return jsonify({"error": "Nenhum dado válido fornecido para atualização"}), 400
 
-        aluno_ref.update(dados_seguros)
+        # Validação de status, se presente
+        if "status" in dados_seguros and dados_seguros["status"] not in ["liberado", "bloqueado"]:
+            return jsonify({"error": "Status inválido. Use 'liberado' ou 'bloqueado'."}), 400
+
+        novo_cpf_raw = dados_seguros.pop("cpf", None)
+        if novo_cpf_raw is not None:
+            novo_cpf_limpo = limpar_cpf(novo_cpf_raw)
+            if not validar_cpf_simples(novo_cpf_limpo):
+                return jsonify({"error": "CPF deve ter 11 números"}), 400
+
+            if novo_cpf_limpo != cpf_limpo:
+                novo_doc = db.collection("alunos").document(novo_cpf_limpo)
+                if novo_doc.get().exists:
+                    return jsonify({"error": "O novo CPF já está cadastrado no sistema"}), 409
+
+                aluno_data = aluno_snap.to_dict()
+                aluno_data.update(dados_seguros)
+                aluno_data["cpf"] = novo_cpf_limpo
+
+                novo_doc.set(aluno_data)
+                aluno_ref.delete()
+
+                return jsonify({
+                    "message": "Dados atualizados com sucesso e CPF alterado",
+                    "cpf_antigo": cpf_limpo,
+                    "cpf_novo": novo_cpf_limpo,
+                    "atualizados": list(dados_seguros.keys()) + ["cpf"]
+                }), 200
+
+        if dados_seguros:
+            aluno_ref.update(dados_seguros)
+
         return jsonify({"message": "Dados atualizados com sucesso", "atualizados": list(dados_seguros.keys())}), 200
         
     except Exception as e:
@@ -219,6 +342,9 @@ def editar_aluno(cpf):
 @app.route("/alunos/<string:cpf>", methods=["DELETE"])
 @token_obrigatorio
 def excluir_aluno(cpf):
+    if not FIREBASE_CONNECTED:
+        return jsonify({"error": "Sistema funcionando em modo offline - Firebase não configurado"}), 503
+
     try:
         cpf_limpo = limpar_cpf(cpf)
         aluno_ref = db.collection("alunos").document(cpf_limpo)
@@ -236,6 +362,9 @@ def excluir_aluno(cpf):
 # ---------------------
 @app.route("/acesso/<string:cpf>", methods=["GET"])
 def verificar_acesso(cpf):
+    if not FIREBASE_CONNECTED:
+        return jsonify({"acesso": False, "mensagem": "Sistema temporariamente indisponível. Procure a secretaria.", "modo": "offline"}), 403
+    
     try:
         cpf_limpo = limpar_cpf(cpf)
         
@@ -264,11 +393,15 @@ def verificar_acesso(cpf):
                 "mensagem": mensagem
             }
         
-        db.collection("logs_acesso").add({
-            **res, 
-            "cpf": cpf_limpo, 
-            "data_hora": firestore.SERVER_TIMESTAMP
-        })
+        # Tenta salvar log, mas não falha se não conseguir
+        try:
+            db.collection("logs_acesso").add({
+                **res, 
+                "cpf": cpf_limpo, 
+                "data_hora": firestore.SERVER_TIMESTAMP
+            })
+        except:
+            pass
         
         if res["acesso"]:
             return jsonify(res), 200
@@ -284,12 +417,14 @@ def verificar_acesso(cpf):
 @app.route("/login", methods=["POST"])
 def login():
     dados = request.get_json()
+    if not dados:
+        return jsonify({"error": "Dados não fornecidos"}), 400
+    
     usuario = dados.get("usuario")
     senha = dados.get("senha")
     
-    # Se ADM_SENHA_HASH estiver no .env, use check_password_hash. Se não, use texto plano (apenas para teste inicial)
-    adm_pass = os.getenv("ADM_SENHA", "admin123")
-    if usuario == os.getenv("ADM_USUARIO", "admin") and senha == adm_pass:
+    # Usuário: admin | Senha: adm123
+    if usuario == "admin" and senha == "adm123":
         return jsonify({"token": gerar_token(usuario)}), 200
     return jsonify({"error": "Login inválido"}), 401
 
